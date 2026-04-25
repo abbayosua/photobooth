@@ -122,12 +122,33 @@ export default function PhotoboothApp() {
   const [showApiDocs, setShowApiDocs] = useState(false)
   
   // Refs
-  const videoRef = useRef<HTMLVideoElement>(null)
+  const videoRef = useRef<HTMLVideoElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const progressIntervalRef = useRef<NodeJS.Timeout | null>(null)
   const debugIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  
+  // Use callback ref to handle video element changes
+  const setVideoRef = useCallback((node: HTMLVideoElement | null) => {
+    console.log('Video ref callback called, node:', node ? 'exists' : 'null')
+    
+    // If we have a stream and a new video element, connect them
+    if (node && streamRef.current) {
+      if (node.srcObject !== streamRef.current) {
+        console.log('Reconnecting stream to video element')
+        node.srcObject = streamRef.current
+      }
+      
+      // If we're supposed to be streaming, make sure video is playing
+      if (isStreaming && node.paused) {
+        console.log('Video was paused, attempting to play')
+        node.play().catch(e => console.error('Play error in ref callback:', e))
+      }
+    }
+    
+    videoRef.current = node
+  }, [isStreaming])
 
   // Update debug info
   const updateDebugInfo = useCallback(() => {
@@ -590,9 +611,9 @@ export default function PhotoboothApp() {
   // STEP 1: Camera View
   const CameraStep = () => (
     <div className="fixed inset-0 bg-black">
-      {/* Video element */}
+      {/* Video element - use callback ref */}
       <video
-        ref={videoRef}
+        ref={setVideoRef}
         playsInline
         muted
         className="w-full h-full object-cover"

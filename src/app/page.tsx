@@ -259,6 +259,79 @@ export default function PhotoboothApp() {
     setCustomBackground('')
   }, [])
 
+  // Helper function to handle streaming transformation
+  const transformWithStreaming = async (
+    payload: { image: string; type: 'style' | 'background'; style?: string; backgroundPrompt?: string },
+    photoId: string,
+    successMessage: string
+  ) => {
+    try {
+      const response = await fetch('/api/photobooth/transform', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      })
+
+      if (!response.ok) {
+        throw new Error('Failed to connect to server')
+      }
+
+      const reader = response.body?.getReader()
+      if (!reader) {
+        throw new Error('Failed to read response stream')
+      }
+
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6))
+              
+              if (data.type === 'status') {
+                console.log('Status:', data.message)
+              } else if (data.type === 'complete') {
+                setProcessedPhotos(prev => 
+                  prev.map(p => 
+                    p.id === photoId 
+                      ? { ...p, processed: data.processedImage, isProcessing: false }
+                      : p
+                  )
+                )
+                toast.success(successMessage)
+                return
+              } else if (data.type === 'error') {
+                throw new Error(data.error)
+              }
+            } catch (parseError) {
+              if (parseError instanceof Error && parseError.message !== 'error') {
+                throw parseError
+              }
+            }
+          }
+        }
+      }
+
+      throw new Error('Stream ended without result')
+    } catch (error) {
+      setProcessedPhotos(prev => prev.filter(p => p.id !== photoId))
+      const errorMessage = error instanceof Error ? error.message : 'Transformation failed'
+      toast.error(errorMessage)
+      console.error('Transform error:', error)
+    } finally {
+      setIsProcessing(false)
+    }
+  }
+
   // Apply style transformation
   const applyStyle = async () => {
     if (!capturedPhoto || !selectedStyle) return
@@ -280,40 +353,11 @@ export default function PhotoboothApp() {
     setProcessedPhotos(prev => [newPhoto, ...prev])
     setIsProcessing(true)
     
-    try {
-      const response = await fetch('/api/photobooth/transform', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          image: capturedPhoto,
-          type: 'style',
-          style: selectedStyle
-        })
-      })
-      
-      const data = await response.json()
-      
-      if (!response.ok) {
-        throw new Error(data.error || 'Transformation failed')
-      }
-      
-      setProcessedPhotos(prev => 
-        prev.map(p => 
-          p.id === photoId 
-            ? { ...p, processed: data.processedImage, isProcessing: false }
-            : p
-        )
-      )
-      
-      toast.success(`${style.name} style applied!`)
-    } catch (error) {
-      console.error('Error applying style:', error)
-      setProcessedPhotos(prev => prev.filter(p => p.id !== photoId))
-      const errorMessage = error instanceof Error ? error.message : 'Failed to apply style. Please try again.'
-      toast.error(errorMessage)
-    } finally {
-      setIsProcessing(false)
-    }
+    await transformWithStreaming(
+      { image: capturedPhoto, type: 'style', style: selectedStyle },
+      photoId,
+      `${style.name} style applied!`
+    )
   }
 
   // Apply background transformation
@@ -343,40 +387,11 @@ export default function PhotoboothApp() {
     setProcessedPhotos(prev => [newPhoto, ...prev])
     setIsProcessing(true)
     
-    try {
-      const response = await fetch('/api/photobooth/transform', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          image: capturedPhoto,
-          type: 'background',
-          backgroundPrompt: prompt
-        })
-      })
-      
-      const data = await response.json()
-      
-      if (!response.ok) {
-        throw new Error(data.error || 'Background generation failed')
-      }
-      
-      setProcessedPhotos(prev => 
-        prev.map(p => 
-          p.id === photoId 
-            ? { ...p, processed: data.processedImage, isProcessing: false }
-            : p
-        )
-      )
-      
-      toast.success('Background generated!')
-    } catch (error) {
-      console.error('Error generating background:', error)
-      setProcessedPhotos(prev => prev.filter(p => p.id !== photoId))
-      const errorMessage = error instanceof Error ? error.message : 'Failed to generate background. Please try again.'
-      toast.error(errorMessage)
-    } finally {
-      setIsProcessing(false)
-    }
+    await transformWithStreaming(
+      { image: capturedPhoto, type: 'background', backgroundPrompt: prompt },
+      photoId,
+      'Background generated!'
+    )
   }
 
   // Download processed photo

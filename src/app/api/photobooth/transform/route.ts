@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server'
+import { NextRequest } from 'next/server'
 import ZAI from 'z-ai-web-dev-sdk'
 
 // Style prompt mappings
@@ -23,66 +23,98 @@ async function getZAI() {
   return zaiInstance
 }
 
-export async function POST(request: NextRequest) {
-  try {
-    const body = await request.json()
-    const { image, type, style, backgroundPrompt } = body
-
-    console.log('Received transform request:', { type, style, hasImage: !!image })
-
-    if (!image) {
-      console.error('Error: Image is required')
-      return NextResponse.json(
-        { error: 'Image is required' },
-        { status: 400 }
-      )
+// Helper to create a streaming response with periodic heartbeats
+function createStreamingResponse() {
+  const encoder = new TextEncoder()
+  let controller: ReadableStreamDefaultController | null = null
+  
+  const stream = new ReadableStream({
+    start(c) {
+      controller = c
     }
+  })
 
-    const zai = await getZAI()
-    console.log('ZAI instance ready')
-
-    if (type === 'style') {
-      // Style transfer: Analyze the photo and generate a styled version
-      return await handleStyleTransfer(zai, image, style)
-    } else if (type === 'background') {
-      // Background generation: Generate new background and create composite
-      return await handleBackgroundGeneration(zai, image, backgroundPrompt)
+  const sendEvent = (data: object) => {
+    if (controller) {
+      controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`))
     }
-
-    console.error('Error: Invalid transformation type:', type)
-    return NextResponse.json(
-      { error: 'Invalid transformation type' },
-      { status: 400 }
-    )
-  } catch (error) {
-    console.error('Transformation error:', error)
-    const errorMessage = error instanceof Error ? error.message : 'Failed to process image'
-    return NextResponse.json(
-      { error: errorMessage },
-      { status: 500 }
-    )
   }
+
+  const close = () => {
+    if (controller) {
+      controller.close()
+    }
+  }
+
+  return { stream, sendEvent, close }
+}
+
+export async function POST(request: NextRequest) {
+  const { stream, sendEvent, close } = createStreamingResponse()
+
+  // Process in background
+  ;(async () => {
+    try {
+      const body = await request.json()
+      const { image, type, style, backgroundPrompt } = body
+
+      console.log('Received transform request:', { type, style, hasImage: !!image })
+
+      if (!image) {
+        sendEvent({ type: 'error', error: 'Image is required' })
+        close()
+        return
+      }
+
+      sendEvent({ type: 'status', message: 'Initializing AI...' })
+
+      const zai = await getZAI()
+      console.log('ZAI instance ready')
+
+      if (type === 'style') {
+        await handleStyleTransfer(zai, image, style, sendEvent)
+      } else if (type === 'background') {
+        await handleBackgroundGeneration(zai, image, backgroundPrompt, sendEvent)
+      } else {
+        sendEvent({ type: 'error', error: 'Invalid transformation type' })
+      }
+    } catch (error) {
+      console.error('Transformation error:', error)
+      const errorMessage = error instanceof Error ? error.message : 'Failed to process image'
+      sendEvent({ type: 'error', error: errorMessage })
+    } finally {
+      close()
+    }
+  })()
+
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+    },
+  })
 }
 
 async function handleStyleTransfer(
   zai: NonNullable<typeof zaiInstance>,
   imageBase64: string,
-  styleId: string
+  styleId: string,
+  sendEvent: (data: object) => void
 ) {
   console.log('Starting style transfer for:', styleId)
   
   const stylePrompt = STYLE_PROMPTS[styleId]
   if (!stylePrompt) {
-    console.error('Error: Invalid style:', styleId)
-    return NextResponse.json(
-      { error: 'Invalid style' },
-      { status: 400 }
-    )
+    sendEvent({ type: 'error', error: 'Invalid style' })
+    return
   }
 
   try {
     // Step 1: Analyze the photo to understand the subject
+    sendEvent({ type: 'status', message: 'Analyzing photo...' })
     console.log('Step 1: Analyzing photo with VLM...')
+    
     const analysisResponse = await zai.chat.completions.createVision({
       messages: [
         {
@@ -114,7 +146,9 @@ Be descriptive but concise. Focus on visual elements only.`
     console.log('Analysis complete:', subjectDescription.substring(0, 100) + '...')
 
     // Step 2: Generate the styled image
+    sendEvent({ type: 'status', message: 'Generating styled image...' })
     console.log('Step 2: Generating styled image...')
+    
     const generationPrompt = `A ${stylePrompt} portrait artwork of ${subjectDescription}. High quality, detailed, professional artistic transformation.`
 
     const imageResponse = await zai.images.generations.create({
@@ -125,39 +159,36 @@ Be descriptive but concise. Focus on visual elements only.`
     const generatedImageBase64 = imageResponse.data[0]?.base64
 
     if (!generatedImageBase64) {
-      console.error('Error: No image generated')
-      return NextResponse.json(
-        { error: 'Failed to generate styled image' },
-        { status: 500 }
-      )
+      sendEvent({ type: 'error', error: 'Failed to generate styled image' })
+      return
     }
 
     console.log('Style transfer complete!')
-    return NextResponse.json({
+    sendEvent({ 
+      type: 'complete', 
       processedImage: `data:image/png;base64,${generatedImageBase64}`,
-      type: 'style',
-      styleId
+      styleId 
     })
   } catch (error) {
     console.error('Style transfer error:', error)
     const errorMessage = error instanceof Error ? error.message : 'Style transfer failed'
-    return NextResponse.json(
-      { error: errorMessage },
-      { status: 500 }
-    )
+    sendEvent({ type: 'error', error: errorMessage })
   }
 }
 
 async function handleBackgroundGeneration(
   zai: NonNullable<typeof zaiInstance>,
   imageBase64: string,
-  backgroundPrompt: string
+  backgroundPrompt: string,
+  sendEvent: (data: object) => void
 ) {
   console.log('Starting background generation...')
   
   try {
     // Step 1: Analyze the photo to understand the subject and their position
+    sendEvent({ type: 'status', message: 'Analyzing photo...' })
     console.log('Step 1: Analyzing photo with VLM...')
+    
     const analysisResponse = await zai.chat.completions.createVision({
       messages: [
         {
@@ -187,7 +218,9 @@ Keep the description focused and concise.`
     console.log('Analysis complete')
 
     // Step 2: Generate a new portrait with the subject on the new background
+    sendEvent({ type: 'status', message: 'Generating new background...' })
     console.log('Step 2: Generating composite image...')
+    
     const compositePrompt = `Professional portrait photograph: ${analysis}. The person is positioned against a beautiful ${backgroundPrompt}. High quality, natural lighting, realistic photography, seamless background integration.`
 
     const compositeResponse = await zai.images.generations.create({
@@ -198,25 +231,19 @@ Keep the description focused and concise.`
     const compositeImageBase64 = compositeResponse.data[0]?.base64
 
     if (!compositeImageBase64) {
-      console.error('Error: No image generated')
-      return NextResponse.json(
-        { error: 'Failed to create composite image' },
-        { status: 500 }
-      )
+      sendEvent({ type: 'error', error: 'Failed to create composite image' })
+      return
     }
 
     console.log('Background generation complete!')
-    return NextResponse.json({
+    sendEvent({ 
+      type: 'complete', 
       processedImage: `data:image/png;base64,${compositeImageBase64}`,
-      type: 'background',
-      backgroundPrompt
+      backgroundPrompt 
     })
   } catch (error) {
     console.error('Background generation error:', error)
     const errorMessage = error instanceof Error ? error.message : 'Background generation failed'
-    return NextResponse.json(
-      { error: errorMessage },
-      { status: 500 }
-    )
+    sendEvent({ type: 'error', error: errorMessage })
   }
 }

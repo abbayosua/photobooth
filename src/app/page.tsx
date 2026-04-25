@@ -591,13 +591,13 @@ export default function PhotoboothApp() {
         </div>
       )}
       
-      {/* Video element - always rendered so ref is available */}
+      {/* Video element - always rendered, invisible but still processing frames */}
       <video
         ref={videoRef}
         autoPlay
         playsInline
         muted
-        className={`absolute inset-0 w-full h-full object-cover scale-x-[-1] ${isStreaming ? 'block' : 'hidden'}`}
+        className={`absolute inset-0 w-full h-full object-cover scale-x-[-1] ${isStreaming ? 'opacity-100 z-20' : 'opacity-0 z-0'}`}
       />
       
       {/* Capture button - only when streaming */}

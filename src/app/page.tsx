@@ -200,35 +200,43 @@ export default function PhotoboothApp() {
       // Assign stream to video
       video.srcObject = stream
       
-      // Wait for video to be ready and play
-      video.onloadedmetadata = () => {
-        console.log('Metadata loaded, video dimensions:', video.videoWidth, 'x', video.videoHeight)
+      // Wait for video to have valid dimensions before playing
+      const waitForVideo = () => {
+        return new Promise<void>((resolve, reject) => {
+          const checkReady = () => {
+            if (video.videoWidth > 0 && video.videoHeight > 0) {
+              console.log('Video has valid dimensions:', video.videoWidth, 'x', video.videoHeight)
+              resolve()
+            } else {
+              console.log('Waiting for video dimensions...')
+              setTimeout(checkReady, 100)
+            }
+          }
+          
+          // Timeout after 10 seconds
+          setTimeout(() => {
+            if (video.videoWidth === 0 || video.videoHeight === 0) {
+              reject(new Error('Timeout waiting for video'))
+            }
+          }, 10000)
+          
+          checkReady()
+        })
       }
       
-      video.onloadeddata = () => {
-        console.log('Data loaded, attempting to play...')
-        video.play()
-          .then(() => {
-            console.log('Video playing! Dimensions:', video.videoWidth, 'x', video.videoHeight)
-            setIsStreaming(true)
-            setIsLoadingCamera(false)
-            toast.success('Camera started!')
-          })
-          .catch((err) => {
-            console.error('Play error:', err)
-            setCameraError('Could not play video stream')
-            setIsLoadingCamera(false)
-          })
-      }
+      // Play the video and wait for it to be ready
+      await video.play()
+      console.log('Video.play() called, waiting for dimensions...')
       
-      video.onerror = (e) => {
-        console.error('Video error:', e)
-        setCameraError('Video element error')
-        setIsLoadingCamera(false)
-      }
+      await waitForVideo()
+      
+      console.log('Camera ready!')
+      setIsStreaming(true)
+      setIsLoadingCamera(false)
+      toast.success('Camera started!')
       
     } catch (error: unknown) {
-      console.error('Error accessing camera:', error)
+      console.error('Error with camera:', error)
       setIsLoadingCamera(false)
       
       let errorMessage = 'Could not access camera. '

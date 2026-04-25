@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import ZAI from 'z-ai-web-dev-sdk'
+import { writeFileSync, existsSync, mkdirSync } from 'fs'
+import { join } from 'path'
 
 // Style prompt mappings
 const STYLE_PROMPTS: Record<string, string> = {
@@ -13,9 +15,6 @@ const STYLE_PROMPTS: Record<string, string> = {
   'pop-art': 'pop art style, bold colors, comic book aesthetic, Roy Lichtenstein inspired, halftone dots'
 }
 
-// FreeImage.host API key
-const FREEIMAGE_API_KEY = '6d207e02198a847aa98d0a2a901485a5'
-
 // In-memory job storage
 const jobs = new Map<string, {
   status: 'pending' | 'processing' | 'complete' | 'error'
@@ -23,7 +22,7 @@ const jobs = new Map<string, {
   image?: string
   style?: string
   backgroundPrompt?: string
-  result?: string  // Will be the hosted URL
+  result?: string
   error?: string
   createdAt: number
 }>()
@@ -43,39 +42,29 @@ function generateJobId(): string {
   return `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
 }
 
-// Upload image to freeimage.host
-async function uploadToFreeImage(base64Data: string): Promise<string> {
-  // Remove data URL prefix if present
-  const base64 = base64Data.replace(/^data:image\/\w+;base64,/, '')
-  
-  const formData = new URLSearchParams()
-  formData.append('key', FREEIMAGE_API_KEY)
-  formData.append('action', 'upload')
-  formData.append('source', base64)
-  formData.append('format', 'json')
-
-  const response = await fetch('https://freeimage.host/api/1/upload', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded'
-    },
-    body: formData.toString()
-  })
-
-  if (!response.ok) {
-    const text = await response.text()
-    console.error('FreeImage upload failed:', text)
-    throw new Error('Failed to upload image to hosting service')
+// Save image locally
+function saveImageLocally(base64Data: string, filename: string): string {
+  try {
+    // Remove data URL prefix if present
+    const base64 = base64Data.replace(/^data:image\/\w+;base64,/, '')
+    
+    // Ensure directory exists
+    const outputDir = join(process.cwd(), 'public', 'generated')
+    if (!existsSync(outputDir)) {
+      mkdirSync(outputDir, { recursive: true })
+    }
+    
+    // Write file
+    const filePath = join(outputDir, filename)
+    const buffer = Buffer.from(base64, 'base64')
+    writeFileSync(filePath, buffer)
+    
+    // Return public URL path
+    return `/generated/${filename}`
+  } catch (error) {
+    console.error('Error saving image:', error)
+    throw new Error('Failed to save image')
   }
-
-  const data = await response.json()
-  
-  if (data.status_code !== 200 || !data.image) {
-    console.error('FreeImage response:', data)
-    throw new Error(data.error?.message || 'Failed to get image URL')
-  }
-
-  return data.image.url
 }
 
 // Process job in background
@@ -161,10 +150,11 @@ Be descriptive but concise. Focus on visual elements only.`
     return
   }
 
-  console.log(`Job ${jobId}: Uploading to image host...`)
+  console.log(`Job ${jobId}: Saving image locally...`)
   
-  // Upload to freeimage.host
-  const imageUrl = await uploadToFreeImage(`data:image/png;base64,${generatedImageBase64}`)
+  // Save locally and get URL
+  const filename = `${jobId}.png`
+  const imageUrl = saveImageLocally(generatedImageBase64, filename)
   
   job.result = imageUrl
   job.status = 'complete'
@@ -222,10 +212,11 @@ Keep the description focused and concise.`
     return
   }
 
-  console.log(`Job ${jobId}: Uploading to image host...`)
+  console.log(`Job ${jobId}: Saving image locally...`)
   
-  // Upload to freeimage.host
-  const imageUrl = await uploadToFreeImage(`data:image/png;base64,${compositeImageBase64}`)
+  // Save locally and get URL
+  const filename = `${jobId}.png`
+  const imageUrl = saveImageLocally(compositeImageBase64, filename)
   
   job.result = imageUrl
   job.status = 'complete'
@@ -248,7 +239,7 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json({
     status: job.status,
-    result: job.result,  // Now a URL instead of base64
+    result: job.result,
     error: job.error
   })
 }

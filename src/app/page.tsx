@@ -268,31 +268,61 @@ export default function PhotoboothApp() {
       })
       
       console.log('Camera access granted, setting up video...')
+      streamRef.current = stream
       
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream
-        streamRef.current = stream
-        
-        // Wait for video to be ready
-        videoRef.current.onloadedmetadata = () => {
-          console.log('Video metadata loaded')
-          videoRef.current?.play()
+      // Wait for video element to be available
+      const video = videoRef.current
+      if (!video) {
+        console.error('Video element not available')
+        setCameraError('Video element not ready. Please try again.')
+        setIsLoadingCamera(false)
+        return
+      }
+      
+      // Set up event handlers BEFORE assigning srcObject to avoid race conditions
+      const handleCanPlay = () => {
+        console.log('Video can play')
+        video.play()
+          .then(() => {
+            console.log('Video playing successfully')
+            setIsStreaming(true)
+            setIsLoadingCamera(false)
+            toast.success('Camera started!')
+          })
+          .catch((err) => {
+            console.error('Error playing video:', err)
+            setCameraError('Could not play video stream')
+            toast.error('Could not play video stream')
+            setIsLoadingCamera(false)
+          })
+      }
+      
+      video.oncanplay = handleCanPlay
+      video.onerror = (e) => {
+        console.error('Video error:', e)
+        setCameraError('Video element error')
+        setIsLoadingCamera(false)
+      }
+      
+      // Now assign the stream
+      video.srcObject = stream
+      
+      // Fallback: if oncanplay doesn't fire, try to play directly after a short delay
+      setTimeout(() => {
+        if (!isStreaming && video.readyState >= 3) {
+          console.log('Fallback: video ready, attempting play')
+          video.play()
             .then(() => {
-              console.log('Video playing successfully')
               setIsStreaming(true)
               setIsLoadingCamera(false)
               toast.success('Camera started!')
             })
-            .catch((err) => {
-              console.error('Error playing video:', err)
-              setCameraError('Could not play video stream')
-              toast.error('Could not play video stream')
-              setIsLoadingCamera(false)
+            .catch(err => {
+              console.error('Fallback play error:', err)
             })
         }
-      } else {
-        setIsLoadingCamera(false)
-      }
+      }, 500)
+      
     } catch (error: unknown) {
       console.error('Error accessing camera:', error)
       setIsLoadingCamera(false)
@@ -311,16 +341,18 @@ export default function PhotoboothApp() {
           // Try again with basic settings
           try {
             const basicStream = await navigator.mediaDevices.getUserMedia({ video: true })
+            streamRef.current = basicStream
             if (videoRef.current) {
               videoRef.current.srcObject = basicStream
-              streamRef.current = basicStream
               await videoRef.current.play()
               setIsStreaming(true)
+              setIsLoadingCamera(false)
               toast.success('Camera started with basic settings!')
             }
           } catch {
             setCameraError('Could not access camera with any settings.')
             toast.error('Could not access camera with any settings.')
+            setIsLoadingCamera(false)
           }
           return
         } else if (error.name === 'NotSupportedError') {
@@ -333,7 +365,7 @@ export default function PhotoboothApp() {
       setCameraError(errorMessage)
       toast.error(errorMessage)
     }
-  }, [])
+  }, [isStreaming])
 
   // Stop camera stream
   const stopCamera = useCallback(() => {
@@ -817,26 +849,28 @@ export default function PhotoboothApp() {
               </CardHeader>
               <CardContent>
                 <div className="relative aspect-video bg-slate-900 rounded-xl overflow-hidden mb-4">
-                  {isStreaming ? (
-                    <>
-                      <video
-                        ref={videoRef}
-                        autoPlay
-                        playsInline
-                        muted
-                        className="w-full h-full object-cover scale-x-[-1]"
-                      />
-                      <div className="absolute bottom-4 left-1/2 -translate-x-1/2">
-                        <Button
-                          onClick={capturePhoto}
-                          size="lg"
-                          className="rounded-full w-16 h-16 bg-white hover:bg-slate-200 shadow-lg"
-                        >
-                          <Circle className="w-10 h-10 text-red-500 fill-red-500" />
-                        </Button>
-                      </div>
-                    </>
-                  ) : capturedPhoto ? (
+                  {/* Video element - always rendered so ref is available */}
+                  <video
+                    ref={videoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    className={`w-full h-full object-cover scale-x-[-1] ${isStreaming ? 'block' : 'hidden'}`}
+                  />
+                  
+                  {isStreaming && (
+                    <div className="absolute bottom-4 left-1/2 -translate-x-1/2">
+                      <Button
+                        onClick={capturePhoto}
+                        size="lg"
+                        className="rounded-full w-16 h-16 bg-white hover:bg-slate-200 shadow-lg"
+                      >
+                        <Circle className="w-10 h-10 text-red-500 fill-red-500" />
+                      </Button>
+                    </div>
+                  )}
+                  
+                  {!isStreaming && capturedPhoto && (
                     <div className="relative w-full h-full">
                       <img
                         src={capturedPhoto}
@@ -855,7 +889,9 @@ export default function PhotoboothApp() {
                         </Button>
                       </div>
                     </div>
-                  ) : (
+                  )}
+                  
+                  {!isStreaming && !capturedPhoto && (
                     <div className="flex flex-col items-center justify-center h-full text-slate-500 p-6">
                       {isLoadingCamera ? (
                         <>

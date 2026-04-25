@@ -1,4 +1,4 @@
-import { NextRequest } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import ZAI from 'z-ai-web-dev-sdk'
 
 // Style prompt mappings
@@ -13,6 +13,18 @@ const STYLE_PROMPTS: Record<string, string> = {
   'pop-art': 'pop art style, bold colors, comic book aesthetic, Roy Lichtenstein inspired, halftone dots'
 }
 
+// In-memory job storage (resets on server restart, but fine for this use case)
+const jobs = new Map<string, {
+  status: 'pending' | 'processing' | 'complete' | 'error'
+  type: 'style' | 'background'
+  image?: string
+  style?: string
+  backgroundPrompt?: string
+  result?: string
+  error?: string
+  createdAt: number
+}>()
+
 // Initialize ZAI instance
 let zaiInstance: Awaited<ReturnType<typeof ZAI.create>> | null = null
 
@@ -23,106 +35,56 @@ async function getZAI() {
   return zaiInstance
 }
 
-// Helper to create a streaming response with periodic heartbeats
-function createStreamingResponse() {
-  const encoder = new TextEncoder()
-  let controller: ReadableStreamDefaultController | null = null
-  
-  const stream = new ReadableStream({
-    start(c) {
-      controller = c
-    }
-  })
-
-  const sendEvent = (data: object) => {
-    if (controller) {
-      controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`))
-    }
-  }
-
-  const close = () => {
-    if (controller) {
-      controller.close()
-    }
-  }
-
-  return { stream, sendEvent, close }
+// Generate unique job ID
+function generateJobId(): string {
+  return `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
 }
 
-export async function POST(request: NextRequest) {
-  const { stream, sendEvent, close } = createStreamingResponse()
+// Process job in background
+async function processJob(jobId: string) {
+  const job = jobs.get(jobId)
+  if (!job) return
 
-  // Process in background
-  ;(async () => {
-    try {
-      const body = await request.json()
-      const { image, type, style, backgroundPrompt } = body
+  job.status = 'processing'
+  console.log(`Processing job ${jobId}:`, job.type)
 
-      console.log('Received transform request:', { type, style, hasImage: !!image })
+  try {
+    const zai = await getZAI()
 
-      if (!image) {
-        sendEvent({ type: 'error', error: 'Image is required' })
-        close()
-        return
-      }
-
-      sendEvent({ type: 'status', message: 'Initializing AI...' })
-
-      const zai = await getZAI()
-      console.log('ZAI instance ready')
-
-      if (type === 'style') {
-        await handleStyleTransfer(zai, image, style, sendEvent)
-      } else if (type === 'background') {
-        await handleBackgroundGeneration(zai, image, backgroundPrompt, sendEvent)
-      } else {
-        sendEvent({ type: 'error', error: 'Invalid transformation type' })
-      }
-    } catch (error) {
-      console.error('Transformation error:', error)
-      const errorMessage = error instanceof Error ? error.message : 'Failed to process image'
-      sendEvent({ type: 'error', error: errorMessage })
-    } finally {
-      close()
+    if (job.type === 'style') {
+      await processStyleTransfer(zai, job, jobId)
+    } else if (job.type === 'background') {
+      await processBackgroundGeneration(zai, job, jobId)
     }
-  })()
-
-  return new Response(stream, {
-    headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-    },
-  })
+  } catch (error) {
+    console.error(`Job ${jobId} error:`, error)
+    job.status = 'error'
+    job.error = error instanceof Error ? error.message : 'Processing failed'
+  }
 }
 
-async function handleStyleTransfer(
+async function processStyleTransfer(
   zai: NonNullable<typeof zaiInstance>,
-  imageBase64: string,
-  styleId: string,
-  sendEvent: (data: object) => void
+  job: NonNullable<typeof jobs extends Map<string, infer T> ? T : never>,
+  jobId: string
 ) {
-  console.log('Starting style transfer for:', styleId)
-  
-  const stylePrompt = STYLE_PROMPTS[styleId]
+  const stylePrompt = STYLE_PROMPTS[job.style!]
   if (!stylePrompt) {
-    sendEvent({ type: 'error', error: 'Invalid style' })
+    job.status = 'error'
+    job.error = 'Invalid style'
     return
   }
 
-  try {
-    // Step 1: Analyze the photo to understand the subject
-    sendEvent({ type: 'status', message: 'Analyzing photo...' })
-    console.log('Step 1: Analyzing photo with VLM...')
-    
-    const analysisResponse = await zai.chat.completions.createVision({
-      messages: [
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'text',
-              text: `Analyze this photo and describe the person's appearance in detail for an artistic transformation. Include:
+  console.log(`Job ${jobId}: Analyzing photo...`)
+  
+  const analysisResponse = await zai.chat.completions.createVision({
+    messages: [
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text: `Analyze this photo and describe the person's appearance in detail for an artistic transformation. Include:
 - Gender and approximate age
 - Hair color and style
 - Skin tone
@@ -131,119 +93,157 @@ async function handleStyleTransfer(
 - Any notable features
 
 Be descriptive but concise. Focus on visual elements only.`
-            },
-            {
-              type: 'image_url',
-              image_url: { url: imageBase64 }
-            }
-          ]
-        }
-      ],
-      thinking: { type: 'disabled' }
-    })
+          },
+          {
+            type: 'image_url',
+            image_url: { url: job.image! }
+          }
+        ]
+      }
+    ],
+    thinking: { type: 'disabled' }
+  })
 
-    const subjectDescription = analysisResponse.choices[0]?.message?.content || 'a person'
-    console.log('Analysis complete:', subjectDescription.substring(0, 100) + '...')
+  const subjectDescription = analysisResponse.choices[0]?.message?.content || 'a person'
+  console.log(`Job ${jobId}: Analysis complete`)
 
-    // Step 2: Generate the styled image
-    sendEvent({ type: 'status', message: 'Generating styled image...' })
-    console.log('Step 2: Generating styled image...')
-    
-    const generationPrompt = `A ${stylePrompt} portrait artwork of ${subjectDescription}. High quality, detailed, professional artistic transformation.`
+  console.log(`Job ${jobId}: Generating styled image...`)
+  const generationPrompt = `A ${stylePrompt} portrait artwork of ${subjectDescription}. High quality, detailed, professional artistic transformation.`
 
-    const imageResponse = await zai.images.generations.create({
-      prompt: generationPrompt,
-      size: '1024x1024'
-    })
+  const imageResponse = await zai.images.generations.create({
+    prompt: generationPrompt,
+    size: '1024x1024'
+  })
 
-    const generatedImageBase64 = imageResponse.data[0]?.base64
+  const generatedImageBase64 = imageResponse.data[0]?.base64
 
-    if (!generatedImageBase64) {
-      sendEvent({ type: 'error', error: 'Failed to generate styled image' })
-      return
-    }
-
-    console.log('Style transfer complete!')
-    sendEvent({ 
-      type: 'complete', 
-      processedImage: `data:image/png;base64,${generatedImageBase64}`,
-      styleId 
-    })
-  } catch (error) {
-    console.error('Style transfer error:', error)
-    const errorMessage = error instanceof Error ? error.message : 'Style transfer failed'
-    sendEvent({ type: 'error', error: errorMessage })
+  if (!generatedImageBase64) {
+    job.status = 'error'
+    job.error = 'Failed to generate styled image'
+    return
   }
+
+  job.result = `data:image/png;base64,${generatedImageBase64}`
+  job.status = 'complete'
+  console.log(`Job ${jobId}: Complete!`)
 }
 
-async function handleBackgroundGeneration(
+async function processBackgroundGeneration(
   zai: NonNullable<typeof zaiInstance>,
-  imageBase64: string,
-  backgroundPrompt: string,
-  sendEvent: (data: object) => void
+  job: NonNullable<typeof jobs extends Map<string, infer T> ? T : never>,
+  jobId: string
 ) {
-  console.log('Starting background generation...')
+  console.log(`Job ${jobId}: Analyzing photo...`)
   
-  try {
-    // Step 1: Analyze the photo to understand the subject and their position
-    sendEvent({ type: 'status', message: 'Analyzing photo...' })
-    console.log('Step 1: Analyzing photo with VLM...')
-    
-    const analysisResponse = await zai.chat.completions.createVision({
-      messages: [
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'text',
-              text: `Analyze this photo and describe:
+  const analysisResponse = await zai.chat.completions.createVision({
+    messages: [
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text: `Analyze this photo and describe:
 1. The person's appearance (briefly): gender, age range, clothing, pose
 2. Their position in the frame (left, center, right)
 3. The lighting direction and quality
 4. The current background (briefly)
 
 Keep the description focused and concise.`
-            },
-            {
-              type: 'image_url',
-              image_url: { url: imageBase64 }
-            }
-          ]
-        }
-      ],
-      thinking: { type: 'disabled' }
-    })
+          },
+          {
+            type: 'image_url',
+            image_url: { url: job.image! }
+          }
+        ]
+      }
+    ],
+    thinking: { type: 'disabled' }
+  })
 
-    const analysis = analysisResponse.choices[0]?.message?.content || 'a person in center frame'
-    console.log('Analysis complete')
+  const analysis = analysisResponse.choices[0]?.message?.content || 'a person in center frame'
+  console.log(`Job ${jobId}: Analysis complete`)
 
-    // Step 2: Generate a new portrait with the subject on the new background
-    sendEvent({ type: 'status', message: 'Generating new background...' })
-    console.log('Step 2: Generating composite image...')
-    
-    const compositePrompt = `Professional portrait photograph: ${analysis}. The person is positioned against a beautiful ${backgroundPrompt}. High quality, natural lighting, realistic photography, seamless background integration.`
+  console.log(`Job ${jobId}: Generating composite image...`)
+  const compositePrompt = `Professional portrait photograph: ${analysis}. The person is positioned against a beautiful ${job.backgroundPrompt}. High quality, natural lighting, realistic photography, seamless background integration.`
 
-    const compositeResponse = await zai.images.generations.create({
-      prompt: compositePrompt,
-      size: '1024x1024'
-    })
+  const compositeResponse = await zai.images.generations.create({
+    prompt: compositePrompt,
+    size: '1024x1024'
+  })
 
-    const compositeImageBase64 = compositeResponse.data[0]?.base64
+  const compositeImageBase64 = compositeResponse.data[0]?.base64
 
-    if (!compositeImageBase64) {
-      sendEvent({ type: 'error', error: 'Failed to create composite image' })
-      return
+  if (!compositeImageBase64) {
+    job.status = 'error'
+    job.error = 'Failed to create composite image'
+    return
+  }
+
+  job.result = `data:image/png;base64,${compositeImageBase64}`
+  job.status = 'complete'
+  console.log(`Job ${jobId}: Complete!`)
+}
+
+// GET - Check job status
+export async function GET(request: NextRequest) {
+  const { searchParams } = new URL(request.url)
+  const jobId = searchParams.get('jobId')
+
+  if (!jobId) {
+    return NextResponse.json({ error: 'Job ID required' }, { status: 400 })
+  }
+
+  const job = jobs.get(jobId)
+  if (!job) {
+    return NextResponse.json({ error: 'Job not found' }, { status: 404 })
+  }
+
+  return NextResponse.json({
+    status: job.status,
+    result: job.result,
+    error: job.error
+  })
+}
+
+// POST - Create new job
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json()
+    const { image, type, style, backgroundPrompt } = body
+
+    console.log('Received transform request:', { type, style, hasImage: !!image })
+
+    if (!image) {
+      return NextResponse.json({ error: 'Image is required' }, { status: 400 })
     }
 
-    console.log('Background generation complete!')
-    sendEvent({ 
-      type: 'complete', 
-      processedImage: `data:image/png;base64,${compositeImageBase64}`,
-      backgroundPrompt 
+    if (type !== 'style' && type !== 'background') {
+      return NextResponse.json({ error: 'Invalid transformation type' }, { status: 400 })
+    }
+
+    // Create job
+    const jobId = generateJobId()
+    jobs.set(jobId, {
+      status: 'pending',
+      type,
+      image,
+      style,
+      backgroundPrompt,
+      createdAt: Date.now()
     })
+
+    // Start processing in background (don't await)
+    processJob(jobId).catch(err => {
+      console.error(`Job ${jobId} failed:`, err)
+    })
+
+    // Return job ID immediately
+    return NextResponse.json({ jobId, status: 'pending' })
   } catch (error) {
-    console.error('Background generation error:', error)
-    const errorMessage = error instanceof Error ? error.message : 'Background generation failed'
-    sendEvent({ type: 'error', error: errorMessage })
+    console.error('Error creating job:', error)
+    return NextResponse.json(
+      { error: 'Failed to create job' },
+      { status: 500 }
+    )
   }
 }

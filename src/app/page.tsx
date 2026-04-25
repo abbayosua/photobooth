@@ -259,13 +259,76 @@ export default function PhotoboothApp() {
     setCustomBackground('')
   }, [])
 
-  // Helper function to handle streaming transformation
-  const transformWithStreaming = async (
+  // Helper function to poll for job status
+  const pollJobStatus = async (jobId: string, photoId: string, successMessage: string) => {
+    const maxAttempts = 120 // 2 minutes max (1 second intervals)
+    let attempts = 0
+
+    const poll = async (): Promise<void> => {
+      attempts++
+      
+      try {
+        const response = await fetch(`/api/photobooth/transform?jobId=${jobId}`)
+        
+        if (!response.ok) {
+          throw new Error('Failed to check job status')
+        }
+
+        const data = await response.json()
+
+        if (data.status === 'complete') {
+          setProcessedPhotos(prev => 
+            prev.map(p => 
+              p.id === photoId 
+                ? { ...p, processed: data.result, isProcessing: false }
+                : p
+            )
+          )
+          toast.success(successMessage)
+          setIsProcessing(false)
+          return
+        }
+
+        if (data.status === 'error') {
+          setProcessedPhotos(prev => prev.filter(p => p.id !== photoId))
+          toast.error(data.error || 'Processing failed')
+          setIsProcessing(false)
+          return
+        }
+
+        // Still processing, continue polling
+        if (attempts < maxAttempts) {
+          setTimeout(poll, 1000) // Poll every 1 second
+        } else {
+          // Timeout
+          setProcessedPhotos(prev => prev.filter(p => p.id !== photoId))
+          toast.error('Processing timed out. Please try again.')
+          setIsProcessing(false)
+        }
+      } catch (error) {
+        console.error('Poll error:', error)
+        // Retry on network error
+        if (attempts < maxAttempts) {
+          setTimeout(poll, 1000)
+        } else {
+          setProcessedPhotos(prev => prev.filter(p => p.id !== photoId))
+          toast.error('Failed to check processing status')
+          setIsProcessing(false)
+        }
+      }
+    }
+
+    await poll()
+  }
+
+  // Helper function to handle transformation with polling
+  const transformWithPolling = async (
     payload: { image: string; type: 'style' | 'background'; style?: string; backgroundPrompt?: string },
     photoId: string,
     successMessage: string
   ) => {
     try {
+      // Create job
       const response = await fetch('/api/photobooth/transform', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -273,61 +336,20 @@ export default function PhotoboothApp() {
       })
 
       if (!response.ok) {
-        throw new Error('Failed to connect to server')
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to start processing')
       }
 
-      const reader = response.body?.getReader()
-      if (!reader) {
-        throw new Error('Failed to read response stream')
-      }
+      const { jobId } = await response.json()
+      console.log('Job created:', jobId)
 
-      const decoder = new TextDecoder()
-      let buffer = ''
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() || ''
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const data = JSON.parse(line.slice(6))
-              
-              if (data.type === 'status') {
-                console.log('Status:', data.message)
-              } else if (data.type === 'complete') {
-                setProcessedPhotos(prev => 
-                  prev.map(p => 
-                    p.id === photoId 
-                      ? { ...p, processed: data.processedImage, isProcessing: false }
-                      : p
-                  )
-                )
-                toast.success(successMessage)
-                return
-              } else if (data.type === 'error') {
-                throw new Error(data.error)
-              }
-            } catch (parseError) {
-              if (parseError instanceof Error && parseError.message !== 'error') {
-                throw parseError
-              }
-            }
-          }
-        }
-      }
-
-      throw new Error('Stream ended without result')
+      // Start polling for status
+      await pollJobStatus(jobId, photoId, successMessage)
     } catch (error) {
       setProcessedPhotos(prev => prev.filter(p => p.id !== photoId))
       const errorMessage = error instanceof Error ? error.message : 'Transformation failed'
       toast.error(errorMessage)
       console.error('Transform error:', error)
-    } finally {
       setIsProcessing(false)
     }
   }
@@ -353,7 +375,7 @@ export default function PhotoboothApp() {
     setProcessedPhotos(prev => [newPhoto, ...prev])
     setIsProcessing(true)
     
-    await transformWithStreaming(
+    await transformWithPolling(
       { image: capturedPhoto, type: 'style', style: selectedStyle },
       photoId,
       `${style.name} style applied!`
@@ -387,7 +409,7 @@ export default function PhotoboothApp() {
     setProcessedPhotos(prev => [newPhoto, ...prev])
     setIsProcessing(true)
     
-    await transformWithStreaming(
+    await transformWithPolling(
       { image: capturedPhoto, type: 'background', backgroundPrompt: prompt },
       photoId,
       'Background generated!'

@@ -755,8 +755,8 @@ export default function PhotoboothApp() {
   // STEP 2: Captured Photo with Options
   const CapturedStep = () => (
     <div className="fixed inset-0 bg-slate-900 flex flex-col">
-      {/* Photo preview */}
-      <div className="flex-1 flex items-center justify-center p-4">
+      {/* Photo preview - 70% of screen height */}
+      <div className="h-[70%] flex items-center justify-center p-4">
         <img
           src={capturedPhoto!}
           alt="Captured"
@@ -897,8 +897,8 @@ export default function PhotoboothApp() {
   // STEP 4: Result
   const ResultStep = () => (
     <div className="fixed inset-0 bg-slate-900 flex flex-col">
-      {/* Result image */}
-      <div className="flex-1 flex items-center justify-center p-4">
+      {/* Result image - 70% of screen height */}
+      <div className="h-[70%] flex items-center justify-center p-4">
         <img
           src={processedPhoto!}
           alt="Result"

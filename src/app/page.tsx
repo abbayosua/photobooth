@@ -184,7 +184,7 @@ export default function PhotoboothApp() {
         audio: false
       })
       
-      console.log('Camera access granted, setting up video...')
+      console.log('Camera access granted, tracks:', stream.getTracks())
       streamRef.current = stream
       
       const video = videoRef.current
@@ -195,47 +195,37 @@ export default function PhotoboothApp() {
         return
       }
       
-      // Set up event handlers BEFORE assigning srcObject to avoid race conditions
-      const handleCanPlay = () => {
-        console.log('Video can play')
+      console.log('Video element found, assigning stream...')
+      
+      // Assign stream to video
+      video.srcObject = stream
+      
+      // Wait for video to be ready and play
+      video.onloadedmetadata = () => {
+        console.log('Metadata loaded, video dimensions:', video.videoWidth, 'x', video.videoHeight)
+      }
+      
+      video.onloadeddata = () => {
+        console.log('Data loaded, attempting to play...')
         video.play()
           .then(() => {
-            console.log('Video playing successfully')
+            console.log('Video playing! Dimensions:', video.videoWidth, 'x', video.videoHeight)
             setIsStreaming(true)
             setIsLoadingCamera(false)
             toast.success('Camera started!')
           })
           .catch((err) => {
-            console.error('Error playing video:', err)
+            console.error('Play error:', err)
             setCameraError('Could not play video stream')
             setIsLoadingCamera(false)
           })
       }
       
-      video.oncanplay = handleCanPlay
       video.onerror = (e) => {
         console.error('Video error:', e)
         setCameraError('Video element error')
         setIsLoadingCamera(false)
       }
-      
-      // Now assign the stream
-      video.srcObject = stream
-      
-      // Fallback: if oncanplay doesn't fire, try to play directly after a short delay
-      setTimeout(() => {
-        const currentVideo = videoRef.current
-        if (currentVideo && currentVideo.readyState >= 3) {
-          console.log('Fallback: video ready, attempting play')
-          currentVideo.play()
-            .then(() => {
-              setIsStreaming(true)
-              setIsLoadingCamera(false)
-              toast.success('Camera started!')
-            })
-            .catch(err => console.error('Fallback play error:', err))
-        }
-      }, 500)
       
     } catch (error: unknown) {
       console.error('Error accessing camera:', error)
@@ -249,26 +239,7 @@ export default function PhotoboothApp() {
         } else if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
           errorMessage = 'No camera found. Please connect a camera and try again.'
         } else if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
-          errorMessage = 'Camera is already in use by another application. Please close other apps using the camera.'
-        } else if (error.name === 'OverconstrainedError') {
-          errorMessage = 'Camera does not meet requirements. Trying with basic settings...'
-          // Try again with basic settings
-          try {
-            const basicStream = await navigator.mediaDevices.getUserMedia({ video: true })
-            streamRef.current = basicStream
-            if (videoRef.current) {
-              videoRef.current.srcObject = basicStream
-              await videoRef.current.play()
-              setIsStreaming(true)
-              setIsLoadingCamera(false)
-              toast.success('Camera started with basic settings!')
-            }
-          } catch {
-            setCameraError('Could not access camera with any settings.')
-            toast.error('Could not access camera with any settings.')
-            setIsLoadingCamera(false)
-          }
-          return
+          errorMessage = 'Camera is already in use by another application.'
         } else {
           errorMessage += error.message
         }
@@ -545,7 +516,6 @@ export default function PhotoboothApp() {
       {/* Video element - always visible */}
       <video
         ref={videoRef}
-        autoPlay
         playsInline
         muted
         className="absolute inset-0 w-full h-full object-cover scale-x-[-1]"

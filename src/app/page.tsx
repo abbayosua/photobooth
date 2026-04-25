@@ -85,6 +85,24 @@ export default function PhotoboothApp() {
   const [isLoadingCamera, setIsLoadingCamera] = useState(false)
   const [cameraError, setCameraError] = useState<string | null>(null)
   
+  // Debug info
+  const [debugInfo, setDebugInfo] = useState({
+    streamActive: false,
+    trackCount: 0,
+    trackEnabled: false,
+    trackMuted: false,
+    trackReadyState: 'unknown',
+    videoReadyState: 0,
+    videoPaused: true,
+    videoEnded: false,
+    videoWidth: 0,
+    videoHeight: 0,
+    videoSrcObject: false,
+    computedDisplay: '',
+    computedVisibility: '',
+    computedOpacity: '',
+  })
+  
   // Photo states
   const [capturedPhoto, setCapturedPhoto] = useState<string | null>(null)
   const [processedPhoto, setProcessedPhoto] = useState<string | null>(null)
@@ -109,6 +127,36 @@ export default function PhotoboothApp() {
   const streamRef = useRef<MediaStream | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const progressIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const debugIntervalRef = useRef<NodeJS.Timeout | null>(null)
+
+  // Update debug info
+  const updateDebugInfo = useCallback(() => {
+    const video = videoRef.current
+    const stream = streamRef.current
+    
+    if (!video) return
+    
+    const track = stream?.getVideoTracks()[0]
+    const computed = window.getComputedStyle(video)
+    
+    setDebugInfo(prev => ({
+      ...prev,
+      streamActive: stream?.active ?? false,
+      trackCount: stream?.getTracks().length ?? 0,
+      trackEnabled: track?.enabled ?? false,
+      trackMuted: track?.muted ?? false,
+      trackReadyState: track?.readyState ?? 'unknown',
+      videoReadyState: video.readyState,
+      videoPaused: video.paused,
+      videoEnded: video.ended,
+      videoWidth: video.videoWidth,
+      videoHeight: video.videoHeight,
+      videoSrcObject: !!video.srcObject,
+      computedDisplay: computed.display,
+      computedVisibility: computed.visibility,
+      computedOpacity: computed.opacity,
+    }))
+  }, [])
 
   // Reset all states
   const resetToCamera = useCallback(() => {
@@ -466,8 +514,29 @@ export default function PhotoboothApp() {
       if (progressIntervalRef.current) {
         clearInterval(progressIntervalRef.current)
       }
+      if (debugIntervalRef.current) {
+        clearInterval(debugIntervalRef.current)
+      }
     }
   }, [])
+  
+  // Start debug polling when streaming
+  useEffect(() => {
+    if (isStreaming) {
+      debugIntervalRef.current = setInterval(updateDebugInfo, 500)
+      updateDebugInfo() // Initial update
+    } else {
+      if (debugIntervalRef.current) {
+        clearInterval(debugIntervalRef.current)
+      }
+    }
+    
+    return () => {
+      if (debugIntervalRef.current) {
+        clearInterval(debugIntervalRef.current)
+      }
+    }
+  }, [isStreaming, updateDebugInfo])
 
   // Hidden elements
   const HiddenElements = () => (
@@ -588,6 +657,67 @@ export default function PhotoboothApp() {
           >
             <Circle className="w-14 h-14 text-red-500 fill-red-500" />
           </button>
+        </div>
+      )}
+      
+      {/* Debug overlay */}
+      {isStreaming && (
+        <div className="absolute top-4 left-4 bg-black/80 text-white text-xs p-3 rounded-lg font-mono max-w-xs">
+          <div className="text-yellow-400 font-bold mb-2">DEBUG INFO</div>
+          <div className="grid grid-cols-2 gap-x-2 gap-y-1">
+            <span>Stream Active:</span>
+            <span className={debugInfo.streamActive ? 'text-green-400' : 'text-red-400'}>
+              {debugInfo.streamActive ? 'YES' : 'NO'}
+            </span>
+            
+            <span>Track Count:</span>
+            <span>{debugInfo.trackCount}</span>
+            
+            <span>Track Enabled:</span>
+            <span className={debugInfo.trackEnabled ? 'text-green-400' : 'text-red-400'}>
+              {debugInfo.trackEnabled ? 'YES' : 'NO'}
+            </span>
+            
+            <span>Track Muted:</span>
+            <span className={debugInfo.trackMuted ? 'text-red-400' : 'text-green-400'}>
+              {debugInfo.trackMuted ? 'YES' : 'NO'}
+            </span>
+            
+            <span>Track State:</span>
+            <span className={debugInfo.trackReadyState === 'live' ? 'text-green-400' : 'text-yellow-400'}>
+              {debugInfo.trackReadyState}
+            </span>
+            
+            <span>Video ReadyState:</span>
+            <span>{debugInfo.videoReadyState} ({['HAVE_NOTHING', 'HAVE_METADATA', 'HAVE_CURRENT_DATA', 'HAVE_FUTURE_DATA', 'HAVE_ENOUGH_DATA'][debugInfo.videoReadyState] || 'unknown'})</span>
+            
+            <span>Video Paused:</span>
+            <span className={debugInfo.videoPaused ? 'text-red-400' : 'text-green-400'}>
+              {debugInfo.videoPaused ? 'YES' : 'NO'}
+            </span>
+            
+            <span>Video Ended:</span>
+            <span className={debugInfo.videoEnded ? 'text-red-400' : 'text-green-400'}>
+              {debugInfo.videoEnded ? 'YES' : 'NO'}
+            </span>
+            
+            <span>Video Size:</span>
+            <span>{debugInfo.videoWidth}x{debugInfo.videoHeight}</span>
+            
+            <span>srcObject:</span>
+            <span className={debugInfo.videoSrcObject ? 'text-green-400' : 'text-red-400'}>
+              {debugInfo.videoSrcObject ? 'SET' : 'NULL'}
+            </span>
+            
+            <span>CSS Display:</span>
+            <span>{debugInfo.computedDisplay}</span>
+            
+            <span>CSS Visibility:</span>
+            <span>{debugInfo.computedVisibility}</span>
+            
+            <span>CSS Opacity:</span>
+            <span>{debugInfo.computedOpacity}</span>
+          </div>
         </div>
       )}
       

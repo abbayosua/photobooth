@@ -542,9 +542,18 @@ export default function PhotoboothApp() {
   // STEP 1: Camera View
   const CameraStep = () => (
     <div className="fixed inset-0 bg-black flex flex-col">
-      {/* Camera not started overlay */}
+      {/* Video element - always visible */}
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        muted
+        className="absolute inset-0 w-full h-full object-cover scale-x-[-1]"
+      />
+      
+      {/* Camera not started overlay - only when NOT streaming */}
       {!isStreaming && !isLoadingCamera && !cameraError && (
-        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-slate-900">
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900">
           <div className="flex gap-8 mb-8">
             <button
               onClick={startCamera}
@@ -567,7 +576,7 @@ export default function PhotoboothApp() {
       
       {/* Loading overlay */}
       {isLoadingCamera && (
-        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-slate-900">
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900">
           <Loader2 className="w-16 h-16 animate-spin text-purple-400 mb-4" />
           <p className="text-white text-lg">Starting camera...</p>
         </div>
@@ -575,7 +584,7 @@ export default function PhotoboothApp() {
       
       {/* Error overlay */}
       {cameraError && (
-        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-slate-900 p-6">
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900 p-6">
           <CameraOff className="w-16 h-16 text-red-400 mb-4" />
           <p className="text-red-400 text-lg text-center mb-2">{cameraError}</p>
           <p className="text-slate-400 text-center mb-6">You can still use the app by uploading a photo</p>
@@ -590,15 +599,6 @@ export default function PhotoboothApp() {
           </div>
         </div>
       )}
-      
-      {/* Video element - always rendered, invisible but still processing frames */}
-      <video
-        ref={videoRef}
-        autoPlay
-        playsInline
-        muted
-        className={`absolute inset-0 w-full h-full object-cover scale-x-[-1] ${isStreaming ? 'opacity-100 z-20' : 'opacity-0 z-0'}`}
-      />
       
       {/* Capture button - only when streaming */}
       {isStreaming && (

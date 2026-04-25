@@ -21,7 +21,8 @@ import {
   Trash2,
   RefreshCw,
   Palette,
-  Mountain
+  Mountain,
+  Upload
 } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -75,6 +76,49 @@ export default function PhotoboothApp() {
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // Handle file upload
+  const handleFileUpload = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+    
+    // Validate file type
+    if (!file.type.startsWith('image/')) {
+      toast.error('Please upload an image file')
+      return
+    }
+    
+    // Validate file size (max 10MB)
+    if (file.size > 10 * 1024 * 1024) {
+      toast.error('Image size should be less than 10MB')
+      return
+    }
+    
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      const dataUrl = e.target?.result as string
+      if (dataUrl) {
+        setCapturedPhoto(dataUrl)
+        setCameraError(null)
+        toast.success('Photo uploaded!')
+      }
+    }
+    reader.onerror = () => {
+      toast.error('Failed to read the image file')
+    }
+    reader.readAsDataURL(file)
+    
+    // Reset the input so the same file can be uploaded again
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
+    }
+  }, [])
+
+  // Trigger file input click
+  const triggerFileUpload = useCallback(() => {
+    fileInputRef.current?.click()
+  }, [])
 
   // Start camera stream
   const startCamera = useCallback(async () => {
@@ -378,17 +422,36 @@ export default function PhotoboothApp() {
           <div className="lg:col-span-2">
             <Card className="bg-slate-800/50 border-slate-700 backdrop-blur-sm overflow-hidden">
               <CardHeader className="pb-4">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between flex-wrap gap-4">
                   <div>
                     <CardTitle className="text-white flex items-center gap-2">
                       <Camera className="w-5 h-5" />
-                      Camera
+                      Camera or Upload
                     </CardTitle>
                     <CardDescription className="text-slate-400">
-                      Capture your photo to get started
+                      Capture or upload a photo to get started
                     </CardDescription>
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex gap-2 flex-wrap">
+                    {/* Hidden file input */}
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/*"
+                      onChange={handleFileUpload}
+                      className="hidden"
+                    />
+                    
+                    {/* Upload button - always visible */}
+                    <Button 
+                      onClick={triggerFileUpload}
+                      variant="outline"
+                      className="bg-purple-600 hover:bg-purple-700 border-purple-500 text-white"
+                    >
+                      <Upload className="w-4 h-4 mr-2" />
+                      Upload Photo
+                    </Button>
+                    
                     {!isStreaming ? (
                       <Button 
                         onClick={startCamera} 
@@ -467,19 +530,64 @@ export default function PhotoboothApp() {
                       ) : cameraError ? (
                         <>
                           <CameraOff className="w-16 h-16 mb-4 text-red-400" />
-                          <p className="text-lg text-center text-red-400">{cameraError}</p>
-                          <Button 
-                            onClick={startCamera} 
-                            variant="outline" 
-                            className="mt-4"
-                          >
-                            Try Again
-                          </Button>
+                          <p className="text-lg text-center text-red-400 mb-2">{cameraError}</p>
+                          <p className="text-sm text-center text-slate-400 mb-4">
+                            You can still use the app by uploading a photo
+                          </p>
+                          <div className="flex gap-3">
+                            <Button 
+                              onClick={startCamera} 
+                              variant="outline" 
+                            >
+                              Try Camera Again
+                            </Button>
+                            <Button 
+                              onClick={triggerFileUpload}
+                              className="bg-purple-600 hover:bg-purple-700"
+                            >
+                              <Upload className="w-4 h-4 mr-2" />
+                              Upload Photo
+                            </Button>
+                          </div>
                         </>
                       ) : (
                         <>
-                          <Camera className="w-16 h-16 mb-4" />
-                          <p className="text-lg text-center">Click "Start Camera" to begin</p>
+                          <div className="flex gap-8 mb-6">
+                            <div className="flex flex-col items-center">
+                              <div className="p-4 rounded-full bg-slate-700 mb-2">
+                                <Camera className="w-10 h-10 text-green-400" />
+                              </div>
+                              <span className="text-sm">Camera</span>
+                            </div>
+                            <div className="flex items-center text-slate-600">
+                              <span className="text-2xl">or</span>
+                            </div>
+                            <div className="flex flex-col items-center">
+                              <div className="p-4 rounded-full bg-slate-700 mb-2">
+                                <Upload className="w-10 h-10 text-purple-400" />
+                              </div>
+                              <span className="text-sm">Upload</span>
+                            </div>
+                          </div>
+                          <p className="text-lg text-center mb-4">
+                            Start camera or upload a photo
+                          </p>
+                          <div className="flex gap-3">
+                            <Button 
+                              onClick={startCamera} 
+                              className="bg-green-600 hover:bg-green-700"
+                            >
+                              <Camera className="w-4 h-4 mr-2" />
+                              Start Camera
+                            </Button>
+                            <Button 
+                              onClick={triggerFileUpload}
+                              className="bg-purple-600 hover:bg-purple-700"
+                            >
+                              <Upload className="w-4 h-4 mr-2" />
+                              Upload Photo
+                            </Button>
+                          </div>
                         </>
                       )}
                     </div>

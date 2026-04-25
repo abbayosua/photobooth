@@ -9,6 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { 
   Camera, 
   CameraOff, 
@@ -22,7 +23,11 @@ import {
   RefreshCw,
   Palette,
   Mountain,
-  Upload
+  Upload,
+  Code,
+  BookOpen,
+  Copy,
+  Check
 } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -50,6 +55,109 @@ const BACKGROUND_PRESETS = [
   { id: 'abstract', name: 'Abstract Art', prompt: 'Abstract colorful background with flowing shapes and gradients, artistic, modern' },
 ]
 
+// API Documentation
+const API_DOCS = [
+  {
+    method: 'GET',
+    path: '/api',
+    description: 'Health check endpoint',
+    request: null,
+    response: {
+      message: 'Hello, world!'
+    }
+  },
+  {
+    method: 'POST',
+    path: '/api/photobooth/transform',
+    description: 'Create a new image transformation job. Returns immediately with a job ID. Processing happens in background.',
+    request: {
+      image: 'string (base64 or data URL) - Required. The image to transform.',
+      type: '"style" | "background" - Required. Type of transformation.',
+      style: 'string - Required for style type. One of: cartoon, oil-painting, watercolor, cyberpunk, vintage, anime, sketch, pop-art',
+      backgroundPrompt: 'string - Required for background type. Description of desired background.'
+    },
+    response: {
+      jobId: 'string - Unique identifier for the job',
+      status: '"pending" - Initial status'
+    }
+  },
+  {
+    method: 'GET',
+    path: '/api/photobooth/transform?jobId={jobId}',
+    description: 'Check the status of a transformation job. Poll this endpoint every 1 second until status is "complete" or "error".',
+    request: null,
+    queryParams: {
+      jobId: 'string - Required. The job ID returned from POST request.'
+    },
+    response: {
+      status: '"pending" | "processing" | "complete" | "error"',
+      result: 'string? - URL to the transformed image (only when complete)',
+      error: 'string? - Error message (only when error)'
+    }
+  }
+]
+
+// Code examples
+const CODE_EXAMPLES = {
+  createJob: `// Create a new transformation job
+const response = await fetch('/api/photobooth/transform', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    image: 'data:image/jpeg;base64,...', // base64 image
+    type: 'style',
+    style: 'anime'
+  })
+});
+
+const { jobId } = await response.json();
+console.log('Job created:', jobId);`,
+
+  checkStatus: `// Check job status
+const response = await fetch(\`/api/photobooth/transform?jobId=\${jobId}\`);
+const data = await response.json();
+
+if (data.status === 'complete') {
+  console.log('Image URL:', data.result);
+} else if (data.status === 'error') {
+  console.error('Error:', data.error);
+} else {
+  // Still processing, poll again in 1 second
+  setTimeout(() => checkStatus(jobId), 1000);
+}`,
+
+  fullExample: `// Full example: Transform an image
+async function transformImage(imageBase64) {
+  // 1. Create job
+  const createRes = await fetch('/api/photobooth/transform', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      image: imageBase64,
+      type: 'style',
+      style: 'anime'
+    })
+  });
+  const { jobId } = await createRes.json();
+
+  // 2. Poll for status
+  while (true) {
+    const statusRes = await fetch(\`/api/photobooth/transform?jobId=\${jobId}\`);
+    const data = await statusRes.json();
+
+    if (data.status === 'complete') {
+      return data.result; // URL to transformed image
+    }
+    if (data.status === 'error') {
+      throw new Error(data.error);
+    }
+
+    // Wait 1 second before polling again
+    await new Promise(r => setTimeout(r, 1000));
+  }
+}`
+}
+
 interface ProcessedPhoto {
   id: string
   original: string
@@ -72,11 +180,25 @@ export default function PhotoboothApp() {
   const [selectedBackground, setSelectedBackground] = useState<string | null>(null)
   const [customBackground, setCustomBackground] = useState('')
   const [isProcessing, setIsProcessing] = useState(false)
+  const [showApiDocs, setShowApiDocs] = useState(false)
+  const [copiedCode, setCopiedCode] = useState<string | null>(null)
   
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // Copy code to clipboard
+  const copyToClipboard = async (code: string, key: string) => {
+    try {
+      await navigator.clipboard.writeText(code)
+      setCopiedCode(key)
+      toast.success('Copied to clipboard!')
+      setTimeout(() => setCopiedCode(null), 2000)
+    } catch {
+      toast.error('Failed to copy')
+    }
+  }
 
   // Handle file upload
   const handleFileUpload = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
@@ -470,6 +592,145 @@ export default function PhotoboothApp() {
       {/* Hidden canvas for photo capture */}
       <canvas ref={canvasRef} className="hidden" />
       
+      {/* API Documentation Modal */}
+      <Dialog open={showApiDocs} onOpenChange={setShowApiDocs}>
+        <DialogContent className="max-w-4xl max-h-[90vh] bg-slate-800 border-slate-700 text-white">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-xl">
+              <BookOpen className="w-6 h-6 text-purple-400" />
+              API Documentation
+            </DialogTitle>
+            <DialogDescription className="text-slate-400">
+              REST API endpoints for the AI Photobooth service
+            </DialogDescription>
+          </DialogHeader>
+          
+          <ScrollArea className="max-h-[70vh] pr-4">
+            <div className="space-y-6">
+              {/* Endpoints */}
+              {API_DOCS.map((api, index) => (
+                <div key={index} className="bg-slate-900/50 rounded-lg p-4 border border-slate-700">
+                  <div className="flex items-center gap-3 mb-3">
+                    <Badge className={`
+                      ${api.method === 'GET' ? 'bg-green-600' : 'bg-blue-600'}
+                      font-mono text-xs
+                    `}>
+                      {api.method}
+                    </Badge>
+                    <code className="text-sm text-purple-300 font-mono">{api.path}</code>
+                  </div>
+                  
+                  <p className="text-slate-300 mb-4">{api.description}</p>
+                  
+                  {api.queryParams && (
+                    <div className="mb-4">
+                      <h4 className="text-sm font-semibold text-slate-400 mb-2">Query Parameters</h4>
+                      <div className="bg-slate-950 rounded p-3 font-mono text-sm">
+                        {Object.entries(api.queryParams).map(([key, value]) => (
+                          <div key={key} className="text-slate-300">
+                            <span className="text-yellow-400">{key}</span>: {value}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  
+                  {api.request && (
+                    <div className="mb-4">
+                      <h4 className="text-sm font-semibold text-slate-400 mb-2">Request Body</h4>
+                      <div className="bg-slate-950 rounded p-3 font-mono text-sm overflow-x-auto">
+                        <pre className="text-slate-300">{JSON.stringify(api.request, null, 2)}</pre>
+                      </div>
+                    </div>
+                  )}
+                  
+                  <div>
+                    <h4 className="text-sm font-semibold text-slate-400 mb-2">Response</h4>
+                    <div className="bg-slate-950 rounded p-3 font-mono text-sm overflow-x-auto">
+                      <pre className="text-green-400">{JSON.stringify(api.response, null, 2)}</pre>
+                    </div>
+                  </div>
+                </div>
+              ))}
+              
+              {/* Code Examples */}
+              <div className="border-t border-slate-700 pt-6">
+                <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                  <Code className="w-5 h-5 text-purple-400" />
+                  Code Examples
+                </h3>
+                
+                {/* Create Job */}
+                <div className="bg-slate-900/50 rounded-lg p-4 border border-slate-700 mb-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <h4 className="text-sm font-semibold text-slate-300">Create Transformation Job</h4>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => copyToClipboard(CODE_EXAMPLES.createJob, 'createJob')}
+                      className="h-8 px-2"
+                    >
+                      {copiedCode === 'createJob' ? (
+                        <Check className="w-4 h-4 text-green-400" />
+                      ) : (
+                        <Copy className="w-4 h-4" />
+                      )}
+                    </Button>
+                  </div>
+                  <pre className="bg-slate-950 rounded p-3 font-mono text-xs text-slate-300 overflow-x-auto whitespace-pre-wrap">
+                    {CODE_EXAMPLES.createJob}
+                  </pre>
+                </div>
+                
+                {/* Check Status */}
+                <div className="bg-slate-900/50 rounded-lg p-4 border border-slate-700 mb-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <h4 className="text-sm font-semibold text-slate-300">Check Job Status</h4>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => copyToClipboard(CODE_EXAMPLES.checkStatus, 'checkStatus')}
+                      className="h-8 px-2"
+                    >
+                      {copiedCode === 'checkStatus' ? (
+                        <Check className="w-4 h-4 text-green-400" />
+                      ) : (
+                        <Copy className="w-4 h-4" />
+                      )}
+                    </Button>
+                  </div>
+                  <pre className="bg-slate-950 rounded p-3 font-mono text-xs text-slate-300 overflow-x-auto whitespace-pre-wrap">
+                    {CODE_EXAMPLES.checkStatus}
+                  </pre>
+                </div>
+                
+                {/* Full Example */}
+                <div className="bg-slate-900/50 rounded-lg p-4 border border-slate-700">
+                  <div className="flex items-center justify-between mb-2">
+                    <h4 className="text-sm font-semibold text-slate-300">Complete Example</h4>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => copyToClipboard(CODE_EXAMPLES.fullExample, 'fullExample')}
+                      className="h-8 px-2"
+                    >
+                      {copiedCode === 'fullExample' ? (
+                        <Check className="w-4 h-4 text-green-400" />
+                      ) : (
+                        <Copy className="w-4 h-4" />
+                      )}
+                    </Button>
+                  </div>
+                  <pre className="bg-slate-950 rounded p-3 font-mono text-xs text-slate-300 overflow-x-auto whitespace-pre-wrap">
+                    {CODE_EXAMPLES.fullExample}
+                  </pre>
+                </div>
+              </div>
+            </div>
+          </ScrollArea>
+        </DialogContent>
+      </Dialog>
+      
       <div className="container mx-auto px-4 py-8">
         {/* Header */}
         <div className="text-center mb-8">
@@ -478,6 +739,14 @@ export default function PhotoboothApp() {
               <Camera className="w-8 h-8 text-white" />
             </div>
             <h1 className="text-4xl font-bold text-white">AI Photobooth</h1>
+            <Button
+              onClick={() => setShowApiDocs(true)}
+              variant="outline"
+              className="ml-4 bg-slate-700/50 border-slate-600 hover:bg-slate-700"
+            >
+              <BookOpen className="w-4 h-4 mr-2" />
+              API Docs
+            </Button>
           </div>
           <p className="text-slate-300 text-lg max-w-2xl mx-auto">
             Capture photos and transform them with AI - generate amazing backgrounds or apply artistic styles

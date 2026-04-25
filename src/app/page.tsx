@@ -128,27 +128,27 @@ export default function PhotoboothApp() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const progressIntervalRef = useRef<NodeJS.Timeout | null>(null)
   const debugIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const isStreamingRef = useRef(false)
   
-  // Use callback ref to handle video element changes
+  // Keep isStreamingRef in sync with state
+  useEffect(() => {
+    isStreamingRef.current = isStreaming
+  }, [isStreaming])
+  
+  // Use callback ref to handle video element changes - NO dependencies to prevent re-creation
   const setVideoRef = useCallback((node: HTMLVideoElement | null) => {
-    console.log('Video ref callback called, node:', node ? 'exists' : 'null')
-    
-    // If we have a stream and a new video element, connect them
-    if (node && streamRef.current) {
-      if (node.srcObject !== streamRef.current) {
-        console.log('Reconnecting stream to video element')
-        node.srcObject = streamRef.current
-      }
+    if (node && streamRef.current && node.srcObject !== streamRef.current) {
+      console.log('Reconnecting stream to video element')
+      node.srcObject = streamRef.current
       
       // If we're supposed to be streaming, make sure video is playing
-      if (isStreaming && node.paused) {
+      if (isStreamingRef.current && node.paused) {
         console.log('Video was paused, attempting to play')
-        node.play().catch(e => console.error('Play error in ref callback:', e))
+        node.play().catch(e => console.error('Play error:', e))
       }
     }
-    
     videoRef.current = node
-  }, [isStreaming])
+  }, []) // No dependencies - function never changes
 
   // Update debug info
   const updateDebugInfo = useCallback(() => {

@@ -178,23 +178,26 @@ export default function PhotoboothApp() {
     }
     
     try {
+      console.log('Requesting camera access...')
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
         audio: false
       })
       
+      console.log('Camera access granted, setting up video...')
       streamRef.current = stream
-      const video = videoRef.current
       
+      const video = videoRef.current
       if (!video) {
-        setCameraError('Video element not ready')
+        console.error('Video element not available')
+        setCameraError('Video element not ready. Please try again.')
         setIsLoadingCamera(false)
         return
       }
       
-      // Set up event handlers BEFORE assigning srcObject
-      const handleLoadedMetadata = () => {
-        console.log('Video metadata loaded')
+      // Set up event handlers BEFORE assigning srcObject to avoid race conditions
+      const handleCanPlay = () => {
+        console.log('Video can play')
         video.play()
           .then(() => {
             console.log('Video playing successfully')
@@ -203,27 +206,28 @@ export default function PhotoboothApp() {
             toast.success('Camera started!')
           })
           .catch((err) => {
-            console.error('Play error:', err)
+            console.error('Error playing video:', err)
             setCameraError('Could not play video stream')
             setIsLoadingCamera(false)
           })
       }
       
-      video.onloadedmetadata = handleLoadedMetadata
+      video.oncanplay = handleCanPlay
       video.onerror = (e) => {
         console.error('Video error:', e)
         setCameraError('Video element error')
         setIsLoadingCamera(false)
       }
       
-      // Assign stream to video
+      // Now assign the stream
       video.srcObject = stream
       
-      // Fallback: try to play after a delay if metadata event doesn't fire
+      // Fallback: if oncanplay doesn't fire, try to play directly after a short delay
       setTimeout(() => {
-        if (video.readyState >= 1 && !isStreaming) {
+        const currentVideo = videoRef.current
+        if (currentVideo && currentVideo.readyState >= 3) {
           console.log('Fallback: video ready, attempting play')
-          video.play()
+          currentVideo.play()
             .then(() => {
               setIsStreaming(true)
               setIsLoadingCamera(false)
@@ -231,35 +235,87 @@ export default function PhotoboothApp() {
             })
             .catch(err => console.error('Fallback play error:', err))
         }
-      }, 1000)
+      }, 500)
       
     } catch (error: unknown) {
+      console.error('Error accessing camera:', error)
       setIsLoadingCamera(false)
-      const errorMessage = error instanceof Error ? error.message : 'Could not access camera'
+      
+      let errorMessage = 'Could not access camera. '
+      
+      if (error instanceof Error) {
+        if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+          errorMessage = 'Camera permission denied. Please allow camera access in your browser settings and try again.'
+        } else if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
+          errorMessage = 'No camera found. Please connect a camera and try again.'
+        } else if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
+          errorMessage = 'Camera is already in use by another application. Please close other apps using the camera.'
+        } else if (error.name === 'OverconstrainedError') {
+          errorMessage = 'Camera does not meet requirements. Trying with basic settings...'
+          // Try again with basic settings
+          try {
+            const basicStream = await navigator.mediaDevices.getUserMedia({ video: true })
+            streamRef.current = basicStream
+            if (videoRef.current) {
+              videoRef.current.srcObject = basicStream
+              await videoRef.current.play()
+              setIsStreaming(true)
+              setIsLoadingCamera(false)
+              toast.success('Camera started with basic settings!')
+            }
+          } catch {
+            setCameraError('Could not access camera with any settings.')
+            toast.error('Could not access camera with any settings.')
+            setIsLoadingCamera(false)
+          }
+          return
+        } else {
+          errorMessage += error.message
+        }
+      }
+      
       setCameraError(errorMessage)
       toast.error(errorMessage)
     }
-  }, [isStreaming])
+  }, [])
 
   // Capture photo
   const capturePhoto = useCallback(() => {
-    if (!videoRef.current || !canvasRef.current) return
+    if (!videoRef.current || !canvasRef.current) {
+      console.error('Video or canvas not available')
+      return
+    }
     
     const video = videoRef.current
     const canvas = canvasRef.current
     const ctx = canvas.getContext('2d')
     
-    if (!ctx) return
+    if (!ctx) {
+      console.error('Could not get canvas context')
+      return
+    }
+    
+    // Check if video has valid dimensions
+    if (video.videoWidth === 0 || video.videoHeight === 0) {
+      console.error('Video dimensions are 0:', video.videoWidth, video.videoHeight)
+      toast.error('Video not ready. Please wait and try again.')
+      return
+    }
+    
+    console.log('Capturing photo, video dimensions:', video.videoWidth, 'x', video.videoHeight)
     
     canvas.width = video.videoWidth
     canvas.height = video.videoHeight
     
+    // Mirror the image horizontally for selfie mode
     ctx.translate(canvas.width, 0)
     ctx.scale(-1, 1)
     ctx.drawImage(video, 0, 0)
     ctx.setTransform(1, 0, 0, 1, 0, 0)
     
     const dataUrl = canvas.toDataURL('image/jpeg', 0.9)
+    console.log('Photo captured, data URL length:', dataUrl.length)
+    
     setCapturedPhoto(dataUrl)
     
     // Stop camera
@@ -486,19 +542,6 @@ export default function PhotoboothApp() {
   // STEP 1: Camera View
   const CameraStep = () => (
     <div className="fixed inset-0 bg-black flex flex-col">
-      {/* Video element - always visible but opacity controlled */}
-      <video
-        ref={videoRef}
-        autoPlay
-        playsInline
-        muted
-        className="absolute inset-0 w-full h-full object-cover scale-x-[-1] transition-opacity duration-300"
-        style={{ 
-          opacity: isStreaming ? 1 : 0,
-          zIndex: isStreaming ? 1 : 0
-        }}
-      />
-      
       {/* Camera not started overlay */}
       {!isStreaming && !isLoadingCamera && !cameraError && (
         <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-slate-900">
@@ -547,6 +590,15 @@ export default function PhotoboothApp() {
           </div>
         </div>
       )}
+      
+      {/* Video element - always rendered so ref is available */}
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        muted
+        className={`absolute inset-0 w-full h-full object-cover scale-x-[-1] ${isStreaming ? 'block' : 'hidden'}`}
+      />
       
       {/* Capture button - only when streaming */}
       {isStreaming && (

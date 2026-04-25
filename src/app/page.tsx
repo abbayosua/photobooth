@@ -417,13 +417,37 @@ export default function PhotoboothApp() {
   }
 
   // Download processed photo
-  const downloadPhoto = (photo: ProcessedPhoto) => {
-    const link = document.createElement('a')
-    link.href = photo.processed || photo.original
-    link.download = `photobooth-${photo.id}.jpg`
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
+  const downloadPhoto = async (photo: ProcessedPhoto) => {
+    const imageUrl = photo.processed || photo.original
+    
+    // If it's an external URL, fetch and convert to blob for download
+    if (imageUrl.startsWith('http')) {
+      try {
+        const response = await fetch(imageUrl)
+        const blob = await response.blob()
+        const blobUrl = URL.createObjectURL(blob)
+        
+        const link = document.createElement('a')
+        link.href = blobUrl
+        link.download = `photobooth-${photo.id}.jpg`
+        document.body.appendChild(link)
+        link.click()
+        document.body.removeChild(link)
+        URL.revokeObjectURL(blobUrl)
+      } catch (error) {
+        // If fetch fails, open in new tab
+        window.open(imageUrl, '_blank')
+        toast.info('Image opened in new tab')
+      }
+    } else {
+      // Base64 data - download directly
+      const link = document.createElement('a')
+      link.href = imageUrl
+      link.download = `photobooth-${photo.id}.jpg`
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+    }
   }
 
   // Delete photo from gallery

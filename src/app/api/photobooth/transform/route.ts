@@ -13,14 +13,17 @@ const STYLE_PROMPTS: Record<string, string> = {
   'pop-art': 'pop art style, bold colors, comic book aesthetic, Roy Lichtenstein inspired, halftone dots'
 }
 
-// In-memory job storage (resets on server restart, but fine for this use case)
+// FreeImage.host API key
+const FREEIMAGE_API_KEY = '6d207e02198a847aa98d0a2a901485a5'
+
+// In-memory job storage
 const jobs = new Map<string, {
   status: 'pending' | 'processing' | 'complete' | 'error'
   type: 'style' | 'background'
   image?: string
   style?: string
   backgroundPrompt?: string
-  result?: string
+  result?: string  // Will be the hosted URL
   error?: string
   createdAt: number
 }>()
@@ -38,6 +41,41 @@ async function getZAI() {
 // Generate unique job ID
 function generateJobId(): string {
   return `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
+}
+
+// Upload image to freeimage.host
+async function uploadToFreeImage(base64Data: string): Promise<string> {
+  // Remove data URL prefix if present
+  const base64 = base64Data.replace(/^data:image\/\w+;base64,/, '')
+  
+  const formData = new URLSearchParams()
+  formData.append('key', FREEIMAGE_API_KEY)
+  formData.append('action', 'upload')
+  formData.append('source', base64)
+  formData.append('format', 'json')
+
+  const response = await fetch('https://freeimage.host/api/1/upload', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded'
+    },
+    body: formData.toString()
+  })
+
+  if (!response.ok) {
+    const text = await response.text()
+    console.error('FreeImage upload failed:', text)
+    throw new Error('Failed to upload image to hosting service')
+  }
+
+  const data = await response.json()
+  
+  if (data.status_code !== 200 || !data.image) {
+    console.error('FreeImage response:', data)
+    throw new Error(data.error?.message || 'Failed to get image URL')
+  }
+
+  return data.image.url
 }
 
 // Process job in background
@@ -123,9 +161,14 @@ Be descriptive but concise. Focus on visual elements only.`
     return
   }
 
-  job.result = `data:image/png;base64,${generatedImageBase64}`
+  console.log(`Job ${jobId}: Uploading to image host...`)
+  
+  // Upload to freeimage.host
+  const imageUrl = await uploadToFreeImage(`data:image/png;base64,${generatedImageBase64}`)
+  
+  job.result = imageUrl
   job.status = 'complete'
-  console.log(`Job ${jobId}: Complete!`)
+  console.log(`Job ${jobId}: Complete! URL: ${imageUrl}`)
 }
 
 async function processBackgroundGeneration(
@@ -179,9 +222,14 @@ Keep the description focused and concise.`
     return
   }
 
-  job.result = `data:image/png;base64,${compositeImageBase64}`
+  console.log(`Job ${jobId}: Uploading to image host...`)
+  
+  // Upload to freeimage.host
+  const imageUrl = await uploadToFreeImage(`data:image/png;base64,${compositeImageBase64}`)
+  
+  job.result = imageUrl
   job.status = 'complete'
-  console.log(`Job ${jobId}: Complete!`)
+  console.log(`Job ${jobId}: Complete! URL: ${imageUrl}`)
 }
 
 // GET - Check job status
@@ -200,7 +248,7 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json({
     status: job.status,
-    result: job.result,
+    result: job.result,  // Now a URL instead of base64
     error: job.error
   })
 }

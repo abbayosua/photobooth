@@ -63,6 +63,8 @@ interface ProcessedPhoto {
 
 export default function PhotoboothApp() {
   const [isStreaming, setIsStreaming] = useState(false)
+  const [isLoadingCamera, setIsLoadingCamera] = useState(false)
+  const [cameraError, setCameraError] = useState<string | null>(null)
   const [capturedPhoto, setCapturedPhoto] = useState<string | null>(null)
   const [processedPhotos, setProcessedPhotos] = useState<ProcessedPhoto[]>([])
   const [selectedStyle, setSelectedStyle] = useState<string | null>(null)
@@ -76,7 +78,20 @@ export default function PhotoboothApp() {
 
   // Start camera stream
   const startCamera = useCallback(async () => {
+    setCameraError(null)
+    setIsLoadingCamera(true)
+    
+    // Check if camera is supported
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      const errorMsg = 'Camera not supported. Please use a modern browser (Chrome, Firefox, Safari, Edge).'
+      setCameraError(errorMsg)
+      toast.error(errorMsg)
+      setIsLoadingCamera(false)
+      return
+    }
+    
     try {
+      console.log('Requesting camera access...')
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { 
           width: { ideal: 1280 },
@@ -86,14 +101,71 @@ export default function PhotoboothApp() {
         audio: false
       })
       
+      console.log('Camera access granted, setting up video...')
+      
       if (videoRef.current) {
         videoRef.current.srcObject = stream
         streamRef.current = stream
-        setIsStreaming(true)
+        
+        // Wait for video to be ready
+        videoRef.current.onloadedmetadata = () => {
+          console.log('Video metadata loaded')
+          videoRef.current?.play()
+            .then(() => {
+              console.log('Video playing successfully')
+              setIsStreaming(true)
+              setIsLoadingCamera(false)
+              toast.success('Camera started!')
+            })
+            .catch((err) => {
+              console.error('Error playing video:', err)
+              setCameraError('Could not play video stream')
+              toast.error('Could not play video stream')
+              setIsLoadingCamera(false)
+            })
+        }
+      } else {
+        setIsLoadingCamera(false)
       }
-    } catch (error) {
+    } catch (error: unknown) {
       console.error('Error accessing camera:', error)
-      toast.error('Could not access camera. Please check permissions.')
+      setIsLoadingCamera(false)
+      
+      let errorMessage = 'Could not access camera. '
+      
+      if (error instanceof Error) {
+        if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+          errorMessage = 'Camera permission denied. Please allow camera access in your browser settings and try again.'
+        } else if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
+          errorMessage = 'No camera found. Please connect a camera and try again.'
+        } else if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
+          errorMessage = 'Camera is already in use by another application. Please close other apps using the camera.'
+        } else if (error.name === 'OverconstrainedError') {
+          errorMessage = 'Camera does not meet requirements. Trying with basic settings...'
+          // Try again with basic settings
+          try {
+            const basicStream = await navigator.mediaDevices.getUserMedia({ video: true })
+            if (videoRef.current) {
+              videoRef.current.srcObject = basicStream
+              streamRef.current = basicStream
+              await videoRef.current.play()
+              setIsStreaming(true)
+              toast.success('Camera started with basic settings!')
+            }
+          } catch {
+            setCameraError('Could not access camera with any settings.')
+            toast.error('Could not access camera with any settings.')
+          }
+          return
+        } else if (error.name === 'NotSupportedError') {
+          errorMessage = 'Camera access requires HTTPS. Please ensure you are using a secure connection.'
+        } else {
+          errorMessage += error.message
+        }
+      }
+      
+      setCameraError(errorMessage)
+      toast.error(errorMessage)
     }
   }, [])
 
@@ -318,9 +390,22 @@ export default function PhotoboothApp() {
                   </div>
                   <div className="flex gap-2">
                     {!isStreaming ? (
-                      <Button onClick={startCamera} className="bg-green-600 hover:bg-green-700">
-                        <Camera className="w-4 h-4 mr-2" />
-                        Start Camera
+                      <Button 
+                        onClick={startCamera} 
+                        className="bg-green-600 hover:bg-green-700"
+                        disabled={isLoadingCamera}
+                      >
+                        {isLoadingCamera ? (
+                          <>
+                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                            Starting...
+                          </>
+                        ) : (
+                          <>
+                            <Camera className="w-4 h-4 mr-2" />
+                            Start Camera
+                          </>
+                        )}
                       </Button>
                     ) : (
                       <Button onClick={stopCamera} variant="destructive">
@@ -372,9 +457,31 @@ export default function PhotoboothApp() {
                       </div>
                     </div>
                   ) : (
-                    <div className="flex flex-col items-center justify-center h-full text-slate-500">
-                      <Camera className="w-16 h-16 mb-4" />
-                      <p className="text-lg">Click "Start Camera" to begin</p>
+                    <div className="flex flex-col items-center justify-center h-full text-slate-500 p-6">
+                      {isLoadingCamera ? (
+                        <>
+                          <Loader2 className="w-16 h-16 mb-4 animate-spin text-purple-500" />
+                          <p className="text-lg text-center">Requesting camera access...</p>
+                          <p className="text-sm text-center mt-2">Please allow camera permissions when prompted</p>
+                        </>
+                      ) : cameraError ? (
+                        <>
+                          <CameraOff className="w-16 h-16 mb-4 text-red-400" />
+                          <p className="text-lg text-center text-red-400">{cameraError}</p>
+                          <Button 
+                            onClick={startCamera} 
+                            variant="outline" 
+                            className="mt-4"
+                          >
+                            Try Again
+                          </Button>
+                        </>
+                      ) : (
+                        <>
+                          <Camera className="w-16 h-16 mb-4" />
+                          <p className="text-lg text-center">Click "Start Camera" to begin</p>
+                        </>
+                      )}
                     </div>
                   )}
                 </div>

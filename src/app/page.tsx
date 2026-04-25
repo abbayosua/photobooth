@@ -291,9 +291,11 @@ export default function PhotoboothApp() {
         })
       })
       
-      if (!response.ok) throw new Error('Transformation failed')
-      
       const data = await response.json()
+      
+      if (!response.ok) {
+        throw new Error(data.error || 'Transformation failed')
+      }
       
       setProcessedPhotos(prev => 
         prev.map(p => 
@@ -307,7 +309,8 @@ export default function PhotoboothApp() {
     } catch (error) {
       console.error('Error applying style:', error)
       setProcessedPhotos(prev => prev.filter(p => p.id !== photoId))
-      toast.error('Failed to apply style. Please try again.')
+      const errorMessage = error instanceof Error ? error.message : 'Failed to apply style. Please try again.'
+      toast.error(errorMessage)
     } finally {
       setIsProcessing(false)
     }
@@ -351,9 +354,11 @@ export default function PhotoboothApp() {
         })
       })
       
-      if (!response.ok) throw new Error('Background generation failed')
-      
       const data = await response.json()
+      
+      if (!response.ok) {
+        throw new Error(data.error || 'Background generation failed')
+      }
       
       setProcessedPhotos(prev => 
         prev.map(p => 
@@ -367,7 +372,8 @@ export default function PhotoboothApp() {
     } catch (error) {
       console.error('Error generating background:', error)
       setProcessedPhotos(prev => prev.filter(p => p.id !== photoId))
-      toast.error('Failed to generate background. Please try again.')
+      const errorMessage = error instanceof Error ? error.message : 'Failed to generate background. Please try again.'
+      toast.error(errorMessage)
     } finally {
       setIsProcessing(false)
     }

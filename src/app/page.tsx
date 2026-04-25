@@ -520,13 +520,14 @@ export default function PhotoboothApp() {
 
   // STEP 1: Camera View
   const CameraStep = () => (
-    <div className="fixed inset-0 bg-black flex flex-col">
-      {/* Video element - always visible */}
+    <div className="fixed inset-0 bg-black">
+      {/* Video element */}
       <video
         ref={videoRef}
         playsInline
         muted
-        className="absolute inset-0 w-full h-full object-cover scale-x-[-1]"
+        className="w-full h-full object-cover"
+        style={{ transform: 'scaleX(-1)' }}
       />
       
       {/* Camera not started overlay - only when NOT streaming */}
